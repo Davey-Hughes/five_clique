@@ -10,10 +10,7 @@ export CXXTARGET := $(BINDIR)/$(TARGET)_debug
 
 # passes C++ building to another makefile to assist in separate release and
 # debug builds
-all valgrind debug release format $(TARGET):
-	$(MAKE) $@ --no-print-directory -j -f makefiles/main.mk
-
-run:
+all run valgrind debug release format $(TARGET):
 	@$(MAKE) $@ --no-print-directory -j -f makefiles/main.mk
 
 # runs `bear -- make` and then compdb
