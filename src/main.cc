@@ -1,19 +1,31 @@
 #include <algorithm>
+#include <atomic>
 #include <bitset>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
 
+#include "BS_thread_pool.hpp"
+
 #define WORD_LEN 5
-#define ALPHABET_LEN 26
 #define NUM_WORDS 5
+#define ALPHABET_LEN 26
 #define TARGET_CHARS_COUNT 4
 
-typedef std::tuple<std::string, std::bitset<ALPHABET_LEN>, std::vector<size_t>, int> word_obj;
+std::atomic_uint64_t num_comparisons = 0;
+std::mutex output_lock;
+
+struct word_obj {
+	int num_target_chars;
+	std::string word;
+	std::bitset<ALPHABET_LEN> bcharset;
+	std::vector<size_t> neighbors;
+};
 
 std::unordered_map<char, int>
 init_char_frequency()
@@ -48,7 +60,7 @@ sort_by_second(const std::pair<char, int> &a, const std::pair<char, int> &b)
 bool
 sort_word_list_by_target_chars(const word_obj &a, const word_obj &b)
 {
-	return std::get<3>(a) > std::get<3>(b);
+	return a.num_target_chars > b.num_target_chars;
 }
 
 void
@@ -59,7 +71,7 @@ find_more_connections(std::vector<word_obj> &word_list, std::vector<std::vector<
 	bool needs_more_letters = problem_letter_count < TARGET_CHARS_COUNT - (ALPHABET_LEN - (NUM_WORDS * WORD_LEN));
 
 	for (auto neighbor: acceptable_neighbors) {
-		if (needs_more_letters && !std::get<3>(word_list[neighbor])) {
+		if (needs_more_letters && !word_list[neighbor].num_target_chars) {
 			break;
 		}
 
@@ -69,18 +81,20 @@ find_more_connections(std::vector<word_obj> &word_list, std::vector<std::vector<
 			prev_indices_copy.push_back(neighbor);
 			output_list.push_back(prev_indices_copy);
 		} else {
+			num_comparisons++;
+
 			std::vector<size_t> neighbor_intersection;
-			std::sort(acceptable_neighbors.begin(), acceptable_neighbors.end());
-			std::sort(std::get<2>(word_list[neighbor]).begin(), std::get<2>(word_list[neighbor]).end());
+
+			// neighbor indices are already sorted
 			std::set_intersection(acceptable_neighbors.begin(), acceptable_neighbors.end(),
-			                      std::get<2>(word_list[neighbor]).begin(),
-			                      std::get<2>(word_list[neighbor]).end(),
+			                      word_list[neighbor].neighbors.begin(),
+			                      word_list[neighbor].neighbors.end(),
 			                      std::back_inserter(neighbor_intersection));
 
 			if (neighbor_intersection.size()) {
 				prev_indices_copy.push_back(neighbor);
 				find_more_connections(word_list, output_list, neighbor_intersection, prev_indices_copy,
-				                      problem_letter_count + std::get<3>(word_list[neighbor]),
+				                      problem_letter_count + word_list[neighbor].num_target_chars,
 				                      depth + 1);
 			}
 		}
@@ -106,7 +120,7 @@ main()
 			std::bitset<ALPHABET_LEN> bcharset = charset_as_bitset<ALPHABET_LEN>(word);
 
 			if (bcharset.count() == word_len) {
-				word_list.push_back({word, bcharset, {}, 0});
+				word_list.push_back({0, word, bcharset, {}});
 				anagrams[bcharset].push_back(word);
 
 				for (auto c: word) {
@@ -125,7 +139,7 @@ main()
 	std::bitset<ALPHABET_LEN> btarget_chars = charset_as_bitset<ALPHABET_LEN>(target_chars);
 
 	for (auto &word: word_list) {
-		std::get<3>(word) = (std::get<1>(word) & btarget_chars).count();
+		word.num_target_chars = (word.bcharset & btarget_chars).count();
 	}
 
 	// sort word list by how many target chars they contain descending
@@ -134,26 +148,27 @@ main()
 	for (ssize_t i = word_list.size() - 1; i >= 0; --i) {
 		for (size_t k = i + 1; k < word_list.size(); ++k) {
 			// true if no bits match
-			if ((std::get<1>(word_list[i]) & std::get<1>(word_list[k])) == 0) {
+			if ((word_list[i].bcharset & word_list[k].bcharset) == 0) {
 				// save index of word that has none of the same characters
-				std::get<2>(word_list[i]).push_back(k);
+				word_list[i].neighbors.push_back(k);
 			}
 		}
 
 		// if the word has any neighbors, keep searching
-		if (std::get<2>(word_list[i]).size()) {
+		if (word_list[i].neighbors.size()) {
 			std::vector<size_t> prev_indices = {(size_t) i};
-			find_more_connections(word_list, output_list, std::get<2>(word_list[i]), prev_indices,
-			                      std::get<3>(word_list[i]));
+			find_more_connections(word_list, output_list, word_list[i].neighbors, prev_indices,
+			                      word_list[i].num_target_chars);
 		}
 	}
+	std::cout << "comparisons: " << num_comparisons << std::endl;
 
 	std::filesystem::create_directories("./output/");
 	std::ofstream outputf("./output/output.csv");
 
 	for (auto five_words: output_list) {
 		for (auto word: five_words) {
-			outputf << std::get<0>(word_list[word]) << ", ";
+			outputf << word_list[word].word << ", ";
 		}
 
 		outputf << '\n';
